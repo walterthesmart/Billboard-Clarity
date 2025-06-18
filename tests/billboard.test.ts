@@ -1,35 +1,83 @@
-import { Clarinet, Tx, Chain, Account, types } from 'https://deno.land/x/clarinet@v0.12.0/index.ts';
-import { assertEquals } from 'https://deno.land/std@0.90.0/testing/asserts.ts';
+import { describe, it, expect } from 'vitest';
+import { Cl } from '@stacks/transactions';
+import { initSimnet } from '@hirosystems/clarinet-sdk';
 
-Clarinet.test({
-  name: 'A quick demo on how to assert expectations',
-  async fn(chain: Chain, accounts: Map<string, Account>) {
-    let wallet_1 = accounts.get('wallet_1')!;
-    let deployer = accounts.get('deployer')!;
-    let assetMaps = chain.getAssetsMaps();
-    const balance = assetMaps.assets['STX'][wallet_1.address];
+const simnet = await initSimnet();
 
-    let block = chain.mineBlock([
-      Tx.contractCall('billboard', 'set-message', [types.utf8('testing')], wallet_1.address),
-      Tx.contractCall('billboard', 'get-message', [], wallet_1.address),
-      Tx.contractCall('billboard', 'set-message', [types.utf8('testing...')], wallet_1.address),
-      Tx.contractCall('billboard', 'get-message', [], wallet_1.address),
-    ]);
+describe('Billboard Contract Tests', () => {
+  it('should allow setting and getting messages with payment', () => {
+    const accounts = simnet.getAccounts();
+    const wallet1 = accounts.get('wallet_1')!;
+    const deployer = accounts.get('deployer')!;
 
-    assertEquals(block.receipts.length, 4);
-    assertEquals(block.height, 2);
+    // Test setting first message
+    const setMessage1 = simnet.callPublicFn(
+      'billboard',
+      'set-message',
+      [Cl.stringUtf8('testing')],
+      wallet1
+    );
+    expect(setMessage1.result).toBeOk(Cl.uint(110)); // price increases by 10
 
-    block.receipts[1].result.expectUtf8('testing');
+    // Test getting the message
+    const getMessage1 = simnet.callReadOnlyFn(
+      'billboard',
+      'get-message',
+      [],
+      wallet1
+    );
+    expect(getMessage1.result).toBeUtf8('testing');
 
-    block.receipts[3].result.expectUtf8('testing...');
+    // Test setting second message
+    const setMessage2 = simnet.callPublicFn(
+      'billboard',
+      'set-message',
+      [Cl.stringUtf8('testing...')],
+      wallet1
+    );
+    expect(setMessage2.result).toBeOk(Cl.uint(120)); // price increases by 10 again
 
-    let [event] = block.receipts[0].events;
-    let { sender, recipient, amount } = event.stx_transfer_event;
-    sender.expectPrincipal(wallet_1.address);
-    recipient.expectPrincipal(`${deployer.address}.billboard`);
-    amount.expectInt(100);
+    // Test getting the updated message
+    const getMessage2 = simnet.callReadOnlyFn(
+      'billboard',
+      'get-message',
+      [],
+      wallet1
+    );
+    expect(getMessage2.result).toBeUtf8('testing...');
 
-    assetMaps = chain.getAssetsMaps();
-    assertEquals(assetMaps.assets['STX'][wallet_1.address], balance - 210);
-  },
+    // Verify STX transfer events
+    expect(setMessage1.events).toHaveLength(1);
+    const transferEvent1 = setMessage1.events[0];
+    expect(transferEvent1.event).toBe('stx_transfer_event');
+    expect(transferEvent1.data.sender).toBe(wallet1);
+    expect(transferEvent1.data.recipient).toBe(`${deployer}.billboard`);
+    expect(transferEvent1.data.amount).toBe('100');
+  });
+
+  it('should return correct initial price', () => {
+    const accounts = simnet.getAccounts();
+    const wallet1 = accounts.get('wallet_1')!;
+
+    const getPrice = simnet.callReadOnlyFn(
+      'billboard',
+      'get-price',
+      [],
+      wallet1
+    );
+    expect(getPrice.result).toBeUint(100);
+  });
+
+  it('should return correct initial message', () => {
+    const accounts = simnet.getAccounts();
+    const wallet1 = accounts.get('wallet_1')!;
+
+    const getMessage = simnet.callReadOnlyFn(
+      'billboard',
+      'get-message',
+      [],
+      wallet1
+    );
+    expect(getMessage.result).toBeUtf8('Hello world!');
+  });
 });
